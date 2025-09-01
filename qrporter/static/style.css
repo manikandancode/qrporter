@@ -1,0 +1,141 @@
+:root{
+  --bg: #0f0f10;
+  --card: #151618;
+  --muted: #a7acb3;
+  --text: #f6f7f9;
+  --brand: #1976d2;
+  --brand2:#1565c0;
+  --ok:#2e7d32;
+  --warn:#ef6c00;
+  --err:#c62828;
+  --border:#2a2c31;
+  --input:#1b1c20;
+  --shadow: 0 8px 24px rgba(0,0,0,.18);
+}
+
+@media (prefers-color-scheme: light){
+  :root{
+    --bg:#f5f6f8;
+    --card:#ffffff;
+    --muted:#606770;
+    --text:#111317;
+    --brand:#1976d2;
+    --brand2:#1565c0;
+    --ok:#1b5e20;
+    --warn:#e65100;
+    --err:#b71c1c;
+    --border:#e4e7eb;
+    --input:#fafbfc;
+    --shadow: 0 8px 24px rgba(0,0,0,.06);
+  }
+}
+
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0; background:var(--bg); color:var(--text);
+  font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,"Noto Sans",sans-serif;
+}
+
+.wrap{
+  min-height:100%; display:flex; align-items:center; justify-content:center; padding:20px;
+}
+.card{
+  width:100%; max-width:680px; background:var(--card);
+  border:1px solid var(--border); border-radius:16px; padding:20px 20px 24px;
+  box-shadow:var(--shadow);
+}
+.head{
+  display:flex; align-items:center; gap:12px; margin-bottom:8px;
+}
+.head img{width:28px; height:28px}
+h1{font-size:20px; margin:0}
+.desc{margin:.5rem 0 1rem; color:var(--muted)}
+.section{
+  background:transparent; border:1px dashed var(--border);
+  border-radius:12px; padding:14px; margin-top:14px
+}
+
+.row{display:flex; gap:12px; flex-wrap:wrap}
+.row > *{flex:1 1 260px}
+
+label{display:block; font-size:14px; color:var(--muted); margin-bottom:6px}
+input[type=file], input[type=text]{
+  width:100%; padding:10px 12px; border-radius:10px;
+  border:1px solid var(--border); background:var(--input); color:var(--text);
+}
+
+.filename{
+  background:var(--input); border:1px solid var(--border); border-radius:10px;
+  padding:10px 12px; color:var(--text); word-break:break-all;
+}
+
+.hint{font-size:13px; color:var(--muted); margin-top:6px}
+
+.actions{display:flex; gap:10px; margin-top:16px; flex-wrap:wrap}
+.btn{
+  appearance:none; border:none; border-radius:10px; padding:10px 14px; cursor:pointer;
+  background:var(--brand); color:#fff; font-weight:600; letter-spacing:.2px; text-decoration:none; display:inline-block;
+}
+.btn:hover{background:var(--brand2)}
+.btn.secondary{background:transparent; color:var(--text); border:1px solid var(--border)}
+
+.status{margin-top:10px; font-size:14px}
+.ok{color:var(--ok)} .warn{color:var(--warn)} .err{color:var(--err)}
+
+.footer{
+  margin-top:18px; display:flex; justify-content:space-between; align-items:center;
+  color:var(--muted); font-size:13px
+}
+code.key{
+  background:var(--input); border:1px solid var(--border);
+  padding:2px 6px; border-radius:6px; color:var(--text)
+}
+
+/* Progress components */
+.progress-wrap {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+progress {
+  width: 100%;
+  height: 10px;
+  -webkit-appearance: none;
+  appearance: none;
+  border: none;
+  background: var(--input);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+/* WebKit/Blink */
+progress::-webkit-progress-bar { background: var(--input); }
+progress::-webkit-progress-value { background: var(--brand); }
+
+/* Firefox */
+progress::-moz-progress-bar { background: var(--brand); }
+
+/* Label next to progress */
+.progress-label { min-width: 48px; color: var(--muted); text-align: right; }
+
+/* Indeterminate state (CSS animation fallback) */
+progress[data-indeterminate="true"] {
+  position: relative;
+}
+progress[data-indeterminate="true"]::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 30%;
+  background: var(--brand);
+  animation: indet 1.2s infinite;
+  border-radius: 8px;
+}
+@keyframes indet {
+  0% { left: 0; width: 20%; }
+  50% { left: 50%; width: 30%; }
+  100% { left: 100%; width: 20%; }
+}

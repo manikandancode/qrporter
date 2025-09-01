@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Upload to PC — QRPorter</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <link rel="icon" href="{{ url_for('static', filename='assets/icon.png') }}" type="image/png" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="head">
+        <img src="{{ url_for('static', filename='assets/icon.png') }}" alt="QRPorter" />
+        <h1>Upload to PC</h1>
+      </div>
+      <p class="desc">Choose a file to send to this computer over the local network.</p>
+
+      <form id="uploadForm" class="section" method="post" enctype="multipart/form-data" action="/receive/{{ token }}">
+        <div class="row">
+          <div>
+            <label for="file">Select file</label>
+            <input id="file" name="file" type="file" required />
+            <div class="hint">Maximum size: 1 GB. Only permitted types are accepted by the PC.</div>
+          </div>
+        </div>
+
+        <!-- CSRF from backend -->
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}" />
+
+        <div class="actions">
+          <button type="submit" class="btn" id="btnUpload">Upload</button>
+          <button type="button" class="btn secondary" id="btnClear">Clear</button>
+        </div>
+
+        <!-- Progress UI -->
+        <div class="progress-wrap">
+          <progress id="uploadProgress" value="0" max="100"></progress>
+          <span id="uploadPercent" class="progress-label"></span>
+          <span id="speedLabel" class="progress-label" style="margin-left:8px;color:#666;"></span>
+        </div>
+
+        <div id="status" class="status"></div>
+      </form>
+
+      <div class="footer">
+        <span>QRPorter</span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById("uploadForm");
+    const fileInput = document.getElementById("file");
+    const statusEl = document.getElementById("status");
+    const btnUpload = document.getElementById("btnUpload");
+    const btnClear = document.getElementById("btnClear");
+    const progressEl = document.getElementById("uploadProgress");
+    const percentEl = document.getElementById("uploadPercent");
+    const speedEl = document.getElementById("speedLabel");
+
+    // Track whether an upload is active (to suppress false warnings from file picker)
+    let uploading = false;
+
+    // --- Keep screen awake (Wake Lock API + fallback) ---
+    let wakeLock = null;
+    let keepAliveVideo = null;
+
+    async function acquireWakeLock() {
+      try {
+        if ('wakeLock' in navigator && navigator.wakeLock.request) {
+          wakeLock = await navigator.wakeLock.request('screen');
+          // Reacquire on visibility regain if needed
+          document.addEventListener('visibilitychange', async () => {
+            if (document.visibilityState === 'visible' && wakeLock === null) {
+              try { wakeLock = await navigator.wakeLock.request('screen'); } catch {}
+            }
+          });
+        } else {
+          // Fallback: hidden tiny looping video to nudge devices from sleeping
+          keepAliveVideo = document.createElement('video');
+          keepAliveVideo.setAttribute('playsinline', '');
+          keepAliveVideo.muted = true;
+          keepAliveVideo.loop = true;
+          keepAliveVideo.width = 1;
+          keepAliveVideo.height = 1;
+          keepAliveVideo.style.position = 'fixed';
+          keepAliveVideo.style.width = '1px';
+          keepAliveVideo.style.height = '1px';
+          keepAliveVideo.style.opacity = '0';
+          // Tiny silent WebM data URI (placeholder single-frame)
+          keepAliveVideo.src = 'data:video/webm;base64,GkXfo0AgQoaBAUL3gQFC8oEAQAAAAAAAAB9AAAAAQAAAwAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+          document.body.appendChild(keepAliveVideo);
+          keepAliveVideo.play().catch(() => {});
+        }
+      } catch (e) {
+        // Non-fatal
+      }
+    }
+
+    async function releaseWakeLock() {
+      try {
+        if (wakeLock && wakeLock.release) {
+          await wakeLock.release();
+        }
+      } catch {}
+      wakeLock = null;
+      if (keepAliveVideo) {
+        try { keepAliveVideo.pause(); } catch {}
+        try { keepAliveVideo.remove(); } catch {}
+      }
+      keepAliveVideo = null;
+    }
+
+    // Warn if page is backgrounded during upload (suppressed when not uploading)
+    function warnBackgrounding() {
+      if (!uploading) return;
+      if (document.hidden) {
+        statusEl.textContent = "Warning: App sent to background. Upload may pause or fail. Please wait...";
+        statusEl.className = "status err";
+      }
+    }
+    document.addEventListener('visibilitychange', warnBackgrounding);
+    window.addEventListener('pagehide', () => {
+      if (!uploading) return;
+      statusEl.textContent = "Warning: Page hidden. Upload may be interrupted.";
+      statusEl.className = "status err";
+    });
+
+    function resetProgress() {
+      progressEl.value = 0;
+      progressEl.removeAttribute('data-indeterminate');
+      percentEl.textContent = "";
+      speedEl.textContent = "";
+    }
+
+    btnClear.addEventListener("click", () => {
+      fileInput.value = "";
+      statusEl.textContent = "";
+      statusEl.className = "status";
+      resetProgress();
+    });
+
+    // Optional: SHA-256 in browser for integrity check (kept, but not required)
+    async function sha256HexFromFile(file) {
+      if (!(window.crypto && crypto.subtle)) {
+        throw new Error("WebCrypto not available");
+      }
+      const buf = await file.arrayBuffer();
+      const hash = await crypto.subtle.digest("SHA-256", buf);
+      const arr = Array.from(new Uint8Array(hash));
+      return arr.map(b => b.toString(16).padStart(2, "0")).join("");
+    }
+
+    let startTs = 0;
+    let lastBytes = 0;
+    let lastTs = 0;
+
+    function fmtMBps(bytesPerSec) {
+      const mbps = bytesPerSec / (1024 * 1024);
+      return mbps.toFixed(2) + " MB/s";
+    }
+
+    form.addEventListener("submit", async function (e) {
+      e.preventDefault();
+
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) {
+        statusEl.textContent = "Please choose a file.";
+        statusEl.className = "status err";
+        return;
+      }
+
+      // Build FormData with existing fields (keeps CSRF intact)
+      const fd = new FormData(form);
+
+      // Include size hint for server-side free space check
+      fd.append("size", file.size.toString());
+
+      // Optional: include checksum for integrity verification
+      try {
+        const hex = await sha256HexFromFile(file);
+        fd.append("sha256", hex);
+      } catch (e) {
+        // Non-fatal if hashing not supported; proceed without checksum
+      }
+
+      // XHR upload with progress
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", form.action, true);
+
+      btnUpload.disabled = true;
+      statusEl.textContent = "Uploading… Keep this screen ON and app in foreground.";
+      statusEl.className = "status";
+
+      resetProgress();
+
+      // Acquire wake lock before starting transfer
+      await acquireWakeLock();
+
+      // Mark upload as active
+      uploading = true;
+
+      // Initialize timing for speed calculations
+      startTs = performance.now();
+      lastTs = startTs;
+      lastBytes = 0;
+
+      xhr.upload.addEventListener("progress", (ev) => {
+        if (ev.lengthComputable) {
+          const pct = Math.min(100, Math.round((ev.loaded / ev.total) * 100));
+          progressEl.value = pct;
+          percentEl.textContent = pct + "%";
+
+          // Average speed since start
+          const now = performance.now();
+          const elapsedSec = (now - startTs) / 1000;
+          if (elapsedSec > 0) {
+            const avgBps = ev.loaded / elapsedSec;
+            // Instant speed over recent delta
+            const deltaBytes = ev.loaded - lastBytes;
+            const deltaSec = (now - lastTs) / 1000;
+            const instBps = deltaSec > 0 ? (deltaBytes / deltaSec) : avgBps;
+            // Prefer instantaneous, fall back to average if too spiky early on
+            const showBps = (ev.loaded < 256 * 1024) ? avgBps : instBps;
+            speedEl.textContent = fmtMBps(showBps);
+            lastBytes = ev.loaded;
+            lastTs = now;
+          }
+        } else {
+          // Indeterminate if total unknown
+          progressEl.setAttribute('data-indeterminate', 'true');
+          percentEl.textContent = "";
+          // Cannot compute speed without total/loaded reliably
+          speedEl.textContent = "";
+        }
+      });
+
+      xhr.addEventListener("load", async () => {
+        btnUpload.disabled = false;
+        // XHR completed; server returns text
+        const ok = xhr.status >= 200 && xhr.status < 300;
+        statusEl.textContent = xhr.responseText || (ok ? "Upload complete." : "Upload failed.");
+        statusEl.className = "status " + (ok ? "ok" : "err");
+        if (!ok && xhr.status === 413) {
+          statusEl.textContent = "File too large (server limit).";
+        } else if (!ok && xhr.status === 507) {
+          statusEl.textContent = "Insufficient storage on PC.";
+        }
+        progressEl.value = 100;
+        percentEl.textContent = "100%";
+        // Final average speed
+        const totalTimeSec = (performance.now() - startTs) / 1000;
+        if (totalTimeSec > 0 && file && file.size) {
+          const finalBps = file.size / totalTimeSec;
+          speedEl.textContent = fmtMBps(finalBps);
+        }
+        uploading = false;
+        await releaseWakeLock();
+      });
+
+      xhr.addEventListener("error", async () => {
+        btnUpload.disabled = false;
+        statusEl.textContent = "Network error.";
+        statusEl.className = "status err";
+        uploading = false;
+        speedEl.textContent = "";
+        await releaseWakeLock();
+      });
+
+      xhr.send(fd);
+    });
+  </script>
+</body>
+</html>
