@@ -4,7 +4,7 @@
 
 # QRPorter — Local Wi‑Fi QR File Transfer
 
-A lightweight desktop + web utility for moving files between a mobile device and a Desktop PC over the local network. Scan a QR code to send or receive files directly on the LAN—no cloud, no cables, and no accounts.
+A lightweight desktop + web utility for moving files between a mobile device and a Desktop PC over the local network. Scan a QR code to send or receive files directly on the LAN—no cloud, no cables, no mobile app and no accounts.
 
 ---
 
