@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/icon.png" alt="QRPorter App Icon" width="120"/>
+</p>
+
 # QRPorter — Local Wi‑Fi QR File Transfer
 
 A lightweight desktop + web utility for moving files between a mobile device and a Desktop PC over the local network. Scan a QR code to send or receive files directly on the LAN—no cloud, no cables, and no accounts.
@@ -17,6 +21,14 @@ A lightweight desktop + web utility for moving files between a mobile device and
 - PC → Mobile: Select the file & generate a QR code; scan to download the selected file on your mobile.
 - Mobile → PC: Generate the QR code, visit the upload page from the QR on mobile; send a file back to the PC.
 - One‑time session tokens and basic rate limiting for local safety.
+
+---
+
+## Screenshots
+
+![QRPorter](https://github.com/user-attachments/assets/f154d18d-4540-4327-8383-2fb6159cb202)  
+![QRPorter_download_from_pc](https://github.com/user-attachments/assets/44d0bc42-4f2c-4795-8ec2-cbb715bae90e)  
+![QRPorter_Upload_to_pc](https://github.com/user-attachments/assets/657c60ec-6038-4daf-849c-bcf2282e3ce0)  
 
 ---
 
