@@ -12,7 +12,7 @@ import urllib.error
 from PySide6.QtWidgets import (
     QApplication, QWidget, QLabel, QVBoxLayout, QHBoxLayout,
     QPushButton, QFileDialog, QMessageBox, QFrame, QGridLayout,
-    QDialog, QProgressBar, QDialogButtonBox
+    QDialog, QProgressBar, QDialogButtonBox, QTextEdit
 )
 from PySide6.QtGui import QPixmap, QFont, QDesktopServices, QIcon
 from PySide6.QtCore import Qt, QSize, QTimer, QUrl
@@ -26,6 +26,29 @@ APP_TITLE = "QRPorter"
 QR_SIZE = 320
 PADDING = 14
 SERVER_PORT = 5000
+
+# About dialog metadata
+APP_VERSION = "1.0.0"
+APP_WEBSITE = "https://due.im/"
+APP_AUTHOR = "Manikandan D"
+APP_LICENSE_TEXT = """MIT License
+Copyright (c) 2025 Manikandan D
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE."""
 
 def _icon_path() -> str:
     return os.path.abspath(os.path.join(os.path.dirname(__file__), "static", "assets", "icon.png"))
@@ -229,6 +252,12 @@ class QRPorterApp(QWidget):
         self.btn_toggle_server.clicked.connect(self.toggle_server)
         status_row.addWidget(self.btn_toggle_server, 0)
 
+        # Add About button (no other logic changed)
+        self.btn_about = QPushButton("About")
+        self.btn_about.setFixedHeight(36)
+        self.btn_about.clicked.connect(self.show_about)
+        status_row.addWidget(self.btn_about, 0)
+
         root.addLayout(status_row)
 
         divider1 = QFrame()
@@ -392,6 +421,52 @@ class QRPorterApp(QWidget):
         self.qr_title.setStyleSheet("color: #000000;")
         self.qr_title.setText("Mobile → PC")
         self.info_label.setText("Scan to upload a file to this PC.")
+
+    # ---- About dialog ----
+    def show_about(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("About QRPorter")
+        dlg.setModal(True)
+        dlg.setMinimumSize(460, 520)
+
+        vbox = QVBoxLayout(dlg)
+
+        title = QLabel(f"{APP_TITLE} v{APP_VERSION}")
+        title.setAlignment(Qt.AlignCenter)
+        title.setFont(QFont("Segoe UI", 12, QFont.Bold))
+        vbox.addWidget(title)
+
+        meta = QLabel(
+            "License: MIT\n"
+            f"Author: {APP_AUTHOR}\n"
+            "Copyright (c) 2025 Manikandan D\n"
+            f"Project website: {APP_WEBSITE}"
+        )
+        meta.setAlignment(Qt.AlignCenter)
+        meta.setWordWrap(True)
+        vbox.addWidget(meta)
+
+        license_box = QTextEdit()
+        license_box.setReadOnly(True)
+        license_box.setPlainText(APP_LICENSE_TEXT)
+        vbox.addWidget(license_box, 1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        btn_copy = QPushButton("Copy License")
+        buttons.addButton(btn_copy, QDialogButtonBox.ActionRole)
+
+        def _copy_license():
+            QApplication.clipboard().setText(APP_LICENSE_TEXT)
+            try:
+                self.toast.show_message("License copied to clipboard", 1800)
+            except Exception:
+                pass
+
+        btn_copy.clicked.connect(_copy_license)
+        buttons.rejected.connect(dlg.reject)
+        vbox.addWidget(buttons)
+
+        dlg.exec()
 
     # ---- Alerts polling ----
     def _poll_events(self):

@@ -41,7 +41,7 @@ app = Flask(
     static_folder=os.path.abspath(os.path.join(os.path.dirname(__file__), 'static'))
 )
 
-# ----- Logging configuration (console + rotating file) -----
+# ----- Logging configuration (file only; console disabled) -----
 LOG_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '../logs'))
 os.makedirs(LOG_DIR, exist_ok=True)
 LOG_PATH = os.path.join(LOG_DIR, 'qrporter.log')
@@ -53,6 +53,19 @@ file_fmt = logging.Formatter('[%(asctime)s] %(levelname)s %(message)s')
 file_handler.setFormatter(file_fmt)
 if not any(isinstance(h, RotatingFileHandler) for h in app.logger.handlers):
     app.logger.addHandler(file_handler)
+
+# Remove any non-file (console/stream) handlers so nothing prints to stdout/stderr
+for h in list(app.logger.handlers):
+    if not isinstance(h, RotatingFileHandler):
+        app.logger.removeHandler(h)
+
+import logging
+werk_logger = logging.getLogger("werkzeug")
+werk_logger.setLevel(logging.ERROR)   # or logging.CRITICAL to hide everything
+werk_logger.propagate = False         # do not bubble to root/console
+for h in list(werk_logger.handlers):
+    werk_logger.removeHandler(h)      # remove its StreamHandler to console
+
 
 # REQUIRED: set a strong secret key in production
 app.secret_key = os.environ.get("QRPORTER_SECRET_KEY", "change-this-to-a-strong-random-value")
@@ -595,4 +608,4 @@ def start_secure_flask():
     cleaner = threading.Thread(target=_session_cleaner, daemon=True)
     cleaner.start()
     app.logger.info("server_start host=%r port=%r debug=%r", "0.0.0.0", 5000, False)
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
