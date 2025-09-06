@@ -2,6 +2,14 @@
   <img src="https://raw.githubusercontent.com/manikandancode/qrporter/main/assets/icon.png" 
        alt="QRPorter App Icon" width="120"/>
 </p>
+[![PyPI - Version](https://img.shields.io/pypi/v/qrporter.svg)](https://pypi.org/project/qrporter/)
+[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/qrporter.svg)](https://pypi.org/project/qrporter/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+![Status](https://img.shields.io/badge/status-stable-brightgreen.svg)
+![Flask](https://img.shields.io/badge/Framework-Flask-000000.svg?logo=flask&logoColor=white)
+![PySide6](https://img.shields.io/badge/GUI-PySide6-41CD52.svg?logo=qt&logoColor=white)
+![File Transfer](https://img.shields.io/badge/Purpose-File%20Transfer-blue.svg)
+![QR Code](https://img.shields.io/badge/QR-Code-black.svg)
 
 # QRPorter — Local Wi‑Fi QR File Transfer
 
