@@ -1,5 +1,6 @@
 <p align="center">
-  <img src="assets/icon.png" alt="QRPorter App Icon" width="120"/>
+  <img src="https://raw.githubusercontent.com/manikandancode/qrporter/main/assets/icon.png" 
+       alt="QRPorter App Icon" width="120"/>
 </p>
 
 # QRPorter — Local Wi‑Fi QR File Transfer
@@ -29,6 +30,26 @@ A lightweight desktop + web utility for moving files between a mobile device and
 ![QRPorter](https://github.com/user-attachments/assets/f154d18d-4540-4327-8383-2fb6159cb202)  
 ![QRPorter_download_from_pc](https://github.com/user-attachments/assets/44d0bc42-4f2c-4795-8ec2-cbb715bae90e)  
 ![QRPorter_Upload_to_pc](https://github.com/user-attachments/assets/657c60ec-6038-4daf-849c-bcf2282e3ce0)  
+
+---
+
+## Installation
+
+You can install **QRPorter** directly from [PyPI](https://pypi.org/project/qrporter/):
+
+```bash
+pip install qrporter
+```
+**Requirements**
+Python 3.12+
+Works on Windows, macOS, and Linux
+
+**Running the App**
+After installation, you can start QRPorter from the terminal:
+
+```bash
+qrporter
+```
 
 ---
 
