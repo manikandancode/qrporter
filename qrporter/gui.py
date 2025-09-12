@@ -9,6 +9,8 @@ import shutil
 import urllib.request
 import urllib.error
 
+from platformdirs import user_data_dir  
+
 from PySide6.QtWidgets import (
     QApplication, QWidget, QLabel, QVBoxLayout, QHBoxLayout,
     QPushButton, QFileDialog, QMessageBox, QFrame, QGridLayout,
@@ -23,17 +25,18 @@ from qrporter.session_manager import create_session
 from qrporter.event_bus import try_pop_event
 
 APP_TITLE = "QRPorter"
+
 QR_SIZE = 320
 PADDING = 14
 SERVER_PORT = 5000
 
 # About dialog metadata
-APP_VERSION = "1.0.0"
+APP_VERSION = "2.0.0"
 APP_WEBSITE = "https://due.im/"
 APP_AUTHOR = "Manikandan D"
+
 APP_LICENSE_TEXT = """MIT License
 Copyright (c) 2025 Manikandan D
-
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights
@@ -58,7 +61,7 @@ def get_local_ip() -> str:
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         s.connect(("8.8.8.8", 80))
-        return s.getsockname()[0]
+        return s.getsockname()
     except Exception:
         return "127.0.0.1"
     finally:
@@ -110,20 +113,25 @@ class CopyProgressDialog(QDialog):
         self.setWindowTitle("Preparing file")
         self.setModal(True)
         self.setMinimumWidth(420)
+
         layout = QVBoxLayout(self)
         title = QLabel(f"Preparing “{filename}” to send to mobile")
         title.setWordWrap(True)
         layout.addWidget(title)
+
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
         layout.addWidget(self.progress)
+
         self.detail = QLabel("0%")
         self.detail.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         layout.addWidget(self.detail)
+
         self.buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
         self.buttons.rejected.connect(self.reject)
         layout.addWidget(self.buttons)
+
         self._cancelled = False
 
     def update_progress(self, pct: int, text: str = ""):
@@ -149,9 +157,10 @@ class QRPorterApp(QWidget):
         if os.path.isfile(icon_file):
             self.setWindowIcon(QIcon(icon_file))
 
-        # Folders (must match backend)
-        self.shared_folder = os.path.abspath(os.path.join(os.path.dirname(__file__), "../shared"))
-        self.received_folder = os.path.abspath(os.path.join(os.path.dirname(__file__), "../received"))
+        # Folders (must match backend) — cross‑platform user data root
+        app_data_root = user_data_dir(APP_TITLE, roaming=True, ensure_exists=True)  # matches backend DATA_ROOT [5]
+        self.shared_folder = os.path.join(app_data_root, "shared")
+        self.received_folder = os.path.join(app_data_root, "received")
         os.makedirs(self.shared_folder, exist_ok=True)
         os.makedirs(self.received_folder, exist_ok=True)
 
@@ -213,7 +222,7 @@ class QRPorterApp(QWidget):
 
         root.addWidget(qr_container, alignment=Qt.AlignCenter)
 
-        # Folder openers only (removed Set Outgoing/Incoming)
+        # Folder openers only 
         folders_grid = QGridLayout()
         folders_grid.setHorizontalSpacing(PADDING)
         folders_grid.setVerticalSpacing(8)
@@ -252,7 +261,7 @@ class QRPorterApp(QWidget):
         self.btn_toggle_server.clicked.connect(self.toggle_server)
         status_row.addWidget(self.btn_toggle_server, 0)
 
-        # Add About button (no other logic changed)
+        # Add About button 
         self.btn_about = QPushButton("About")
         self.btn_about.setFixedHeight(36)
         self.btn_about.clicked.connect(self.show_about)
@@ -317,7 +326,7 @@ class QRPorterApp(QWidget):
                 return
             os.makedirs(path, exist_ok=True)
             url = QUrl.fromLocalFile(path)
-            QDesktopServices.openUrl(url)
+            QDesktopServices.openUrl(url)  # opens with OS file manager 
         except Exception as e:
             QMessageBox.warning(self, "Open Folder", f"Unable to open folder:\n{path}\n\n{e}")
 
@@ -335,9 +344,11 @@ class QRPorterApp(QWidget):
             total = os.path.getsize(src)
         except Exception:
             total = 0
+
         copied = 0
         chunk = 1024 * 1024
         os.makedirs(os.path.dirname(dst), exist_ok=True)
+
         with open(src, 'rb') as f_in, open(dst, 'wb') as f_out:
             while True:
                 if progress_dialog.cancelled():
@@ -400,7 +411,6 @@ class QRPorterApp(QWidget):
         ip = get_local_ip()
         ip = self._normalize_ip_for_url(ip)
         url = f"http://{ip}:{SERVER_PORT}/send/{token}"
-
         qr_img = generate_qr_qimage(url, size=QR_SIZE)
         self.qr_code_label.setPixmap(QPixmap.fromImage(qr_img).scaled(
             QSize(QR_SIZE, QR_SIZE), Qt.KeepAspectRatio, Qt.SmoothTransformation
@@ -413,7 +423,6 @@ class QRPorterApp(QWidget):
         ip = get_local_ip()
         ip = self._normalize_ip_for_url(ip)
         url = f"http://{ip}:{SERVER_PORT}/receive/{token}"
-
         qr_img = generate_qr_qimage(url, size=QR_SIZE)
         self.qr_code_label.setPixmap(QPixmap.fromImage(qr_img).scaled(
             QSize(QR_SIZE, QR_SIZE), Qt.KeepAspectRatio, Qt.SmoothTransformation

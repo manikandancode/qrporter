@@ -11,13 +11,14 @@ import base64
 import logging
 from logging.handlers import RotatingFileHandler
 from collections import defaultdict, deque
+from platformdirs import user_data_dir, user_log_dir
 
 from flask import (
     Flask, request, send_from_directory,
     render_template, abort, make_response, jsonify
 )
-from werkzeug.utils import secure_filename
 
+from werkzeug.utils import secure_filename
 from qrporter.session_manager import (
     verify_session, mark_used, clear_all_sessions,
     prune_expired, enforce_max_active, MAX_ACTIVE_SESSIONS
@@ -25,13 +26,20 @@ from qrporter.session_manager import (
 from qrporter.utils import allowed_file
 from qrporter.event_bus import push_event
 
-# Folders (must align with GUI)
-DOWNLOAD_FOLDER = os.path.abspath(os.path.join(os.path.dirname(__file__), '../shared'))
-RECEIVED_FOLDER = os.path.abspath(os.path.join(os.path.dirname(__file__), '../received'))
+APP_NAME = "QRPorter"
+
+# -------- Cross-platform, per-user data locations --------
+# Data root (user-writable): Windows → %APPDATA%\QRPorter, macOS → ~/Library/Application Support/QRPorter,
+# Linux → ~/.local/share/QRPorter (XDG). ensure_exists creates directory as needed.
+DATA_ROOT = user_data_dir(APP_NAME, roaming=True, ensure_exists=True)
+
+# Folders 
+DOWNLOAD_FOLDER = os.path.join(DATA_ROOT, "shared")
+RECEIVED_FOLDER = os.path.join(DATA_ROOT, "received")
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 os.makedirs(RECEIVED_FOLDER, exist_ok=True)
 
-# Current, mutable folders (default to above; updated by GUI via local-only endpoint)
+# Current, mutable folders 
 CURRENT_DOWNLOAD_FOLDER = DOWNLOAD_FOLDER
 CURRENT_RECEIVED_FOLDER = RECEIVED_FOLDER
 
@@ -41,8 +49,10 @@ app = Flask(
     static_folder=os.path.abspath(os.path.join(os.path.dirname(__file__), 'static'))
 )
 
-# ----- Logging configuration (file only; console disabled) -----
-LOG_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '../logs'))
+# ----- Logging configuration (file only;) -----
+# Log root: Windows → %APPDATA%\QRPorter\Logs or equivalent; macOS → ~/Library/Logs/QRPorter;
+# Linux → ~/.local/state/QRPorter/Logs when opinionated; created if missing. 
+LOG_DIR = user_log_dir(APP_NAME, ensure_exists=True)
 os.makedirs(LOG_DIR, exist_ok=True)
 LOG_PATH = os.path.join(LOG_DIR, 'qrporter.log')
 
@@ -59,13 +69,12 @@ for h in list(app.logger.handlers):
     if not isinstance(h, RotatingFileHandler):
         app.logger.removeHandler(h)
 
-import logging
-werk_logger = logging.getLogger("werkzeug")
-werk_logger.setLevel(logging.ERROR)   # or logging.CRITICAL to hide everything
-werk_logger.propagate = False         # do not bubble to root/console
+import logging as _logging
+werk_logger = _logging.getLogger("werkzeug")
+werk_logger.setLevel(_logging.ERROR)  
+werk_logger.propagate = False  
 for h in list(werk_logger.handlers):
-    werk_logger.removeHandler(h)      # remove its StreamHandler to console
-
+    werk_logger.removeHandler(h)  # remove its StreamHandler to console
 
 # REQUIRED: set a strong secret key in production
 app.secret_key = os.environ.get("QRPORTER_SECRET_KEY", "change-this-to-a-strong-random-value")
@@ -154,8 +163,10 @@ def _now():
     return time.time()
 
 def _prune_window(dq: deque, window_sec: int, now_t: float):
-    while dq and now_t - dq > window_sec:
+    # Remove timestamps from the left which are older than window_sec
+    while dq and now_t - dq[0] > window_sec:
         dq.popleft()
+
 
 def _check_limit(bucket_name: str, limit: int, window_sec: int, ip: str, now_t: float) -> bool:
     dq = _rate_buckets[ip][bucket_name]
@@ -178,6 +189,7 @@ def _apply_rate_limits():
     path = request.path or ""
     if path.startswith(app.static_url_path or "/static") or _is_maintenance_path(path):
         return None
+
     ip = _client_ip()
     t = _now()
 
@@ -206,7 +218,7 @@ def _apply_rate_limits():
 
 # --- Suspicious pattern tracking for alerts ---
 _failed_window = 120.0  # seconds
-_failed_threshold = 5    # failures within window
+_failed_threshold = 5   # failures within window
 _failed_attempts = defaultdict(deque)  # ip -> deque[timestamps]
 
 def _note_failure(ip: str):
@@ -280,8 +292,7 @@ def __set_folders():
         return jsonify(ok=False, error="failed"), 500
 
 # --- Routes ---
-
-@app.route('/send/<token>', methods=['GET'])
+@app.route('/send/<token>/', methods=['GET'])
 def send_file(token):
     ip = _client_ip()
     ok, sess = verify_session(token, ip, password=None)
@@ -298,11 +309,10 @@ def send_file(token):
     filename = os.path.basename(filepath)
     _log_event("download_prepare_ok", ip=ip, token=token, filename=filename)
     csrf_token = generate_csrf_token(token)
-
     push_event("device_connected", {"ip": ip, "token": token, "route": "/send"})
     return render_template('send_file.html', filename=filename, token=token, csrf_token=csrf_token)
 
-@app.route('/download/<token>/<filename>', methods=['GET'])
+@app.route('/download/<token>/<filename>/', methods=['GET'])
 def download_file(token, filename):
     ip = _client_ip()
     ok, sess = verify_session(token, ip, password=None)
@@ -334,10 +344,9 @@ def download_file(token, filename):
     safe_name = os.path.basename(session_path)
     return send_from_directory(base, safe_name, as_attachment=True)
 
-@app.route('/receive/<token>', methods=['GET', 'POST'])
+@app.route('/receive/<token>/', methods=['GET', 'POST'])
 def receive_file(token):
     import shutil  # local import to keep global imports unchanged
-
     ip = _client_ip()
     ok, sess = verify_session(token, ip, password=None)
     if not ok:
@@ -359,7 +368,6 @@ def receive_file(token):
 
         original_name = file.filename
         cleaned_name = sanitize_filename(os.path.basename(original_name))
-
         if not allowed_file(cleaned_name):
             _log_event("upload_invalid_type", ip=ip, token=token, filename=cleaned_name)
             _note_failure(ip)
@@ -384,7 +392,6 @@ def receive_file(token):
 
         # Choose a non-overwriting final path
         final_path = _unique_path(CURRENT_RECEIVED_FOLDER, cleaned_name)
-
         if not _ensure_within_dir(CURRENT_RECEIVED_FOLDER, final_path):
             _log_event("upload_invalid_path", ip=ip, token=token, filename=cleaned_name)
             return "Invalid path", 400
@@ -408,7 +415,6 @@ def receive_file(token):
         try:
             os.makedirs(os.path.dirname(final_path), exist_ok=True)
             _log_event("upload_start", ip=ip, token=token, filename=os.path.basename(final_path))
-
             file.save(part_path)
 
             try:
@@ -452,6 +458,7 @@ def receive_file(token):
             except Exception as e:
                 _log_event("upload_checksum_error", ip=ip, token=token, filename=os.path.basename(final_path), error=str(e))
                 return "Checksum verification error", 500
+
             if computed != provided_sha256:
                 try:
                     os.remove(final_path)
@@ -463,14 +470,12 @@ def receive_file(token):
                 _log_event("upload_checksum_ok", ip=ip, token=token, filename=os.path.basename(final_path), sha256=computed)
 
         mark_used(token)
-
         try:
             saved_size = os.path.getsize(final_path)
         except Exception:
             saved_size = -1
 
         _log_event("upload_success", ip=ip, token=token, filename=os.path.basename(final_path), size=saved_size)
-
         push_event("device_connected", {
             "ip": ip,
             "token": token,
@@ -483,7 +488,6 @@ def receive_file(token):
     return render_template('receive_file.html', token=token, csrf_token=csrf_token)
 
 # Local-only maintenance endpoints
-
 @app.route('/__clear_sessions__', methods=['POST'])
 def __clear_sessions():
     ip = _client_ip()
@@ -501,7 +505,6 @@ def __cleanup_parts():
     if ip not in ('127.0.0.1', '::1'):
         _log_event("cleanup_parts_denied", ip=ip)
         return abort(403)
-
     removed = 0
     try:
         for name in os.listdir(CURRENT_RECEIVED_FOLDER):
@@ -515,7 +518,6 @@ def __cleanup_parts():
                 _log_event("cleanup_parts_error", file=name, error=str(e))
     except Exception as e:
         _log_event("cleanup_iter_error", error=str(e))
-
     _log_event("cleanup_parts_ok", removed=removed)
     return f"Removed {removed} unfinished files", 200
 
@@ -525,13 +527,11 @@ def __shutdown():
     if ip not in ('127.0.0.1', '::1'):
         _log_event("shutdown_denied", ip=ip)
         return abort(403)
-
     func = request.environ.get('werkzeug.server.shutdown')
     if func is not None:
         _log_event("shutdown_ok", ip=ip, mode="werkzeug")
         func()
         return "Server shutting down...", 200
-
     try:
         os.kill(os.getpid(), signal.SIGINT)
         _log_event("shutdown_ok", ip=ip, mode="signal")
