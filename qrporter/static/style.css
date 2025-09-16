@@ -139,3 +139,59 @@ progress[data-indeterminate="true"]::before {
   50% { left: 50%; width: 30%; }
   100% { left: 100%; width: 20%; }
 }
+/* Multiple file selection display */
+.file-list {
+  margin-top: 10px;
+}
+
+.selected-files {
+  background: var(--input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+.selected-files strong {
+  color: var(--text);
+  display: block;
+  margin-bottom: 6px;
+}
+
+.selected-files ul {
+  margin: 0;
+  padding-left: 16px;
+  color: var(--muted);
+}
+
+.selected-files li {
+  margin: 2px 0;
+  word-break: break-word;
+}
+/* Enhanced file validation styles */
+.selected-files.error {
+  background: var(--input);
+  border: 1px solid var(--err);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+  color: var(--err);
+}
+
+.size-info {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+}
+
+.total-size {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.remaining-size {
+  color: var(--muted);
+}

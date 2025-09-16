@@ -11,14 +11,15 @@ import base64
 import logging
 from logging.handlers import RotatingFileHandler
 from collections import defaultdict, deque
+
 from platformdirs import user_data_dir, user_log_dir
 
 from flask import (
     Flask, request, send_from_directory,
     render_template, abort, make_response, jsonify
 )
-
 from werkzeug.utils import secure_filename
+
 from qrporter.session_manager import (
     verify_session, mark_used, clear_all_sessions,
     prune_expired, enforce_max_active, MAX_ACTIVE_SESSIONS
@@ -26,20 +27,18 @@ from qrporter.session_manager import (
 from qrporter.utils import allowed_file
 from qrporter.event_bus import push_event
 
+import zipfile
+import io
+from datetime import datetime
+
 APP_NAME = "QRPorter"
 
 # -------- Cross-platform, per-user data locations --------
-# Data root (user-writable): Windows → %APPDATA%\QRPorter, macOS → ~/Library/Application Support/QRPorter,
-# Linux → ~/.local/share/QRPorter (XDG). ensure_exists creates directory as needed.
 DATA_ROOT = user_data_dir(APP_NAME, roaming=True, ensure_exists=True)
-
-# Folders 
 DOWNLOAD_FOLDER = os.path.join(DATA_ROOT, "shared")
 RECEIVED_FOLDER = os.path.join(DATA_ROOT, "received")
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 os.makedirs(RECEIVED_FOLDER, exist_ok=True)
-
-# Current, mutable folders 
 CURRENT_DOWNLOAD_FOLDER = DOWNLOAD_FOLDER
 CURRENT_RECEIVED_FOLDER = RECEIVED_FOLDER
 
@@ -50,12 +49,9 @@ app = Flask(
 )
 
 # ----- Logging configuration (file only;) -----
-# Log root: Windows → %APPDATA%\QRPorter\Logs or equivalent; macOS → ~/Library/Logs/QRPorter;
-# Linux → ~/.local/state/QRPorter/Logs when opinionated; created if missing. 
 LOG_DIR = user_log_dir(APP_NAME, ensure_exists=True)
 os.makedirs(LOG_DIR, exist_ok=True)
 LOG_PATH = os.path.join(LOG_DIR, 'qrporter.log')
-
 app.logger.setLevel(logging.INFO)
 file_handler = RotatingFileHandler(LOG_PATH, maxBytes=2 * 1024 * 1024, backupCount=5, encoding="utf-8")
 file_handler.setLevel(logging.INFO)
@@ -63,26 +59,19 @@ file_fmt = logging.Formatter('[%(asctime)s] %(levelname)s %(message)s')
 file_handler.setFormatter(file_fmt)
 if not any(isinstance(h, RotatingFileHandler) for h in app.logger.handlers):
     app.logger.addHandler(file_handler)
-
-# Remove any non-file (console/stream) handlers so nothing prints to stdout/stderr
 for h in list(app.logger.handlers):
     if not isinstance(h, RotatingFileHandler):
         app.logger.removeHandler(h)
-
 import logging as _logging
 werk_logger = _logging.getLogger("werkzeug")
-werk_logger.setLevel(_logging.ERROR)  
-werk_logger.propagate = False  
+werk_logger.setLevel(_logging.ERROR)
+werk_logger.propagate = False
 for h in list(werk_logger.handlers):
-    werk_logger.removeHandler(h)  # remove its StreamHandler to console
+    werk_logger.removeHandler(h)
 
-# REQUIRED: set a strong secret key in production
 app.secret_key = os.environ.get("QRPORTER_SECRET_KEY", "change-this-to-a-strong-random-value")
-
-# Max upload size (bytes), e.g., 1GB
 app.config['MAX_CONTENT_LENGTH'] = 1 * 1024 * 1024 * 1024
 
-# Defensive filename sanitization: keep alnum, dash, underscore, dot, space
 _filename_safe_re = re.compile(r'[^A-Za-z0-9.\-_ ]+')
 
 def sanitize_filename(name: str) -> str:
@@ -131,7 +120,6 @@ def validate_csrf_token(session_token: str, token_from_form: str) -> bool:
         return False
     return hmac.compare_digest(expected, raw)
 
-# Secure headers (CSP etc.)
 @app.after_request
 def _set_security_headers(resp):
     resp.headers.setdefault("X-Content-Type-Options", "nosniff")
@@ -143,7 +131,6 @@ def _set_security_headers(resp):
     )
     return resp
 
-# Anti-cache for dynamic pages (skip static)
 @app.after_request
 def _no_cache_sensitive(resp):
     if request.path.startswith(app.static_url_path or "/static"):
@@ -163,10 +150,8 @@ def _now():
     return time.time()
 
 def _prune_window(dq: deque, window_sec: int, now_t: float):
-    # Remove timestamps from the left which are older than window_sec
     while dq and now_t - dq[0] > window_sec:
         dq.popleft()
-
 
 def _check_limit(bucket_name: str, limit: int, window_sec: int, ip: str, now_t: float) -> bool:
     dq = _rate_buckets[ip][bucket_name]
@@ -189,10 +174,8 @@ def _apply_rate_limits():
     path = request.path or ""
     if path.startswith(app.static_url_path or "/static") or _is_maintenance_path(path):
         return None
-
     ip = _client_ip()
     t = _now()
-
     if path.startswith("/receive/") and request.method == "POST":
         if not _check_limit("upload_min", UPLOAD_PER_MIN, 60, ip, t):
             _log_event("rate_limit_block", ip=ip, path=path, method="POST", rule="upload_minute")
@@ -201,25 +184,21 @@ def _apply_rate_limits():
             _log_event("rate_limit_block", ip=ip, path=path, method="POST", rule="upload_hour")
             return _too_many("Too many uploads in the last hour. Please try later.")
         return None
-
     if path.startswith("/download/") and request.method == "GET":
         if not _check_limit("dl_min", DL_PER_MIN, 60, ip, t):
             _log_event("rate_limit_block", ip=ip, path=path, method="GET", rule="download_minute")
             return _too_many("Too many downloads. Please wait and try again.")
         return None
-
     if path.startswith("/send/") and request.method == "GET":
         if not _check_limit("send_min", DL_PER_MIN, 60, ip, t):
             _log_event("rate_limit_block", ip=ip, path=path, method="GET", rule="send_minute")
             return _too_many("Too many requests. Please wait and try again.")
         return None
-
     return None
 
-# --- Suspicious pattern tracking for alerts ---
 _failed_window = 120.0  # seconds
-_failed_threshold = 5   # failures within window
-_failed_attempts = defaultdict(deque)  # ip -> deque[timestamps]
+_failed_threshold = 5  # failures within window
+_failed_attempts = defaultdict(deque)
 
 def _note_failure(ip: str):
     dq = _failed_attempts[ip]
@@ -236,22 +215,12 @@ def _note_failure(ip: str):
 
 def _is_private_ip(ip: str) -> bool:
     return (
-        ip.startswith("10.")
-        or ip.startswith("192.168.")
-        or ip.startswith("172.16.") or ip.startswith("172.17.") or ip.startswith("172.18.")
-        or ip.startswith("172.19.") or ip.startswith("172.20.") or ip.startswith("172.21.")
-        or ip.startswith("172.22.") or ip.startswith("172.23.") or ip.startswith("172.24.")
-        or ip.startswith("172.25.") or ip.startswith("172.26.") or ip.startswith("172.27.")
-        or ip.startswith("172.28.") or ip.startswith("172.29.") or ip.startswith("172.30.") or ip.startswith("172.31.")
-        or ip == "127.0.0.1" or ip == "::1"
+        ip.startswith("10.") or ip.startswith("192.168.") or
+        any(ip.startswith(f"172.{i}.") for i in range(16, 32)) or
+        ip == "127.0.0.1" or ip == "::1"
     )
 
-# --- Helper to avoid overwriting existing files ---
 def _unique_path(directory: str, filename: str) -> str:
-    """
-    Return a collision-free path by appending (n) before the extension:
-    name.txt -> name (1).txt, name (2).txt, ...
-    """
     directory = os.path.abspath(directory)
     base = os.path.basename(filename)
     stem, ext = os.path.splitext(base)
@@ -265,7 +234,6 @@ def _unique_path(directory: str, filename: str) -> str:
             return candidate
         n += 1
 
-# --- Local-only folder config endpoint ---
 @app.route('/__set_folders__', methods=['POST'])
 def __set_folders():
     ip = _client_ip()
@@ -291,8 +259,8 @@ def __set_folders():
         _log_event("set_folders_error", error=str(e))
         return jsonify(ok=False, error="failed"), 500
 
-# --- Routes ---
-@app.route('/send/<token>/', methods=['GET'])
+# --- Send file to mobile route ---
+@app.route('/send/<token>', methods=['GET'])
 def send_file(token):
     ip = _client_ip()
     ok, sess = verify_session(token, ip, password=None)
@@ -312,7 +280,8 @@ def send_file(token):
     push_event("device_connected", {"ip": ip, "token": token, "route": "/send"})
     return render_template('send_file.html', filename=filename, token=token, csrf_token=csrf_token)
 
-@app.route('/download/<token>/<filename>/', methods=['GET'])
+# --- Download file from PC route ---
+@app.route('/download/<token>/<filename>', methods=['GET'])
 def download_file(token, filename):
     ip = _client_ip()
     ok, sess = verify_session(token, ip, password=None)
@@ -321,7 +290,6 @@ def download_file(token, filename):
         _note_failure(ip)
         return sess, 403
 
-    # Serve the exact file stored in session, but ensure it lives under CURRENT_DOWNLOAD_FOLDER
     session_path = sess.get("file_path") or ""
     if not session_path or not os.path.isfile(session_path):
         _log_event("download_missing_session_path", ip=ip, token=token, path=session_path)
@@ -339,12 +307,12 @@ def download_file(token, filename):
 
     _log_event("download_success", ip=ip, token=token, filename=os.path.basename(session_path), size=fsize)
     push_event("device_connected", {"ip": ip, "token": token, "route": "/download"})
-
     base = os.path.dirname(session_path)
     safe_name = os.path.basename(session_path)
     return send_from_directory(base, safe_name, as_attachment=True)
 
-@app.route('/receive/<token>/', methods=['GET', 'POST'])
+# --- Receive files from mobile (supports multiple files) ---
+@app.route('/receive/<token>', methods=['GET', 'POST'])
 def receive_file(token):
     import shutil  # local import to keep global imports unchanged
     ip = _client_ip()
@@ -361,133 +329,131 @@ def receive_file(token):
             _note_failure(ip)
             return "Invalid CSRF token", 403
 
-        file = request.files.get('file')
-        if not file or not file.filename:
+        files = request.files.getlist('files')
+        if not files or all(not f.filename for f in files):
             _log_event("upload_no_file", ip=ip, token=token)
-            return "No file provided", 400
+            return "No files provided", 400
 
-        original_name = file.filename
-        cleaned_name = sanitize_filename(os.path.basename(original_name))
-        if not allowed_file(cleaned_name):
-            _log_event("upload_invalid_type", ip=ip, token=token, filename=cleaned_name)
-            _note_failure(ip)
-            return "Invalid file type", 400
-
-        # Optional size hint from client (bytes) for pre-flight free space check
         size_hint_raw = request.form.get("size")
         try:
-            size_hint = int(size_hint_raw) if size_hint_raw is not None else None
-        except Exception:
-            size_hint = None
+            total_size_hint = int(size_hint_raw) if size_hint_raw else None
+        except:
+            total_size_hint = None
 
-        if size_hint is not None and size_hint > 0:
+        if total_size_hint and total_size_hint > 0:
             try:
                 total, used, free = shutil.disk_usage(CURRENT_RECEIVED_FOLDER)
-            except Exception:
+            except:
                 total = used = free = -1
-            required = int(size_hint * 1.05)
+            
+            required = int(total_size_hint * 1.05)
             if free >= 0 and free < required:
-                _log_event("upload_insufficient_space", ip=ip, token=token, filename=cleaned_name, need=required, free=free)
-                return "Insufficient disk space for upload", 507  # 507 Insufficient Storage
+                _log_event("upload_insufficient_space", ip=ip, token=token, 
+                          files_count=len(files), need=required, free=free)
+                return "Insufficient disk space for upload", 507
 
-        # Choose a non-overwriting final path
-        final_path = _unique_path(CURRENT_RECEIVED_FOLDER, cleaned_name)
-        if not _ensure_within_dir(CURRENT_RECEIVED_FOLDER, final_path):
-            _log_event("upload_invalid_path", ip=ip, token=token, filename=cleaned_name)
-            return "Invalid path", 400
+        saved_files = []
+        total_saved_size = 0
+        
+        for file_idx, file in enumerate(files):
+            if not file or not file.filename:
+                continue
+                
+            original_name = file.filename
+            cleaned_name = sanitize_filename(os.path.basename(original_name))
+            
+            if not allowed_file(cleaned_name):
+                _log_event("upload_invalid_type", ip=ip, token=token, 
+                          filename=cleaned_name, file_index=file_idx)
+                continue
 
-        # Alert on unexpected IP ranges (basic heuristic)
+            final_path = _unique_path(CURRENT_RECEIVED_FOLDER, cleaned_name)
+            
+            if not _ensure_within_dir(CURRENT_RECEIVED_FOLDER, final_path):
+                _log_event("upload_invalid_path", ip=ip, token=token, 
+                          filename=cleaned_name, file_index=file_idx)
+                continue
+
+            base_part = final_path + ".part"
+            part_path = base_part
+            suffix = 1
+            while os.path.exists(part_path):
+                part_path = f"{base_part}.{suffix}"
+                suffix += 1
+
+            try:
+                os.makedirs(os.path.dirname(final_path), exist_ok=True)
+                _log_event("upload_start", ip=ip, token=token, 
+                          filename=os.path.basename(final_path), file_index=file_idx)
+                file.save(part_path)
+                try:
+                    part_size = os.path.getsize(part_path)
+                except:
+                    part_size = -1
+                if part_size > app.config['MAX_CONTENT_LENGTH']:
+                    try:
+                        os.remove(part_path)
+                    except:
+                        pass
+                    _log_event("upload_too_large", ip=ip, token=token, 
+                              filename=os.path.basename(final_path), 
+                              size=part_size, file_index=file_idx)
+                    continue
+                try:
+                    os.replace(part_path, final_path)
+                except FileExistsError:
+                    final_path = _unique_path(CURRENT_RECEIVED_FOLDER, os.path.basename(final_path))
+                    os.replace(part_path, final_path)
+                try:
+                    saved_size = os.path.getsize(final_path)
+                    total_saved_size += saved_size
+                except:
+                    saved_size = -1
+                saved_files.append({
+                    'filename': os.path.basename(final_path),
+                    'path': final_path,
+                    'size': saved_size
+                })
+                _log_event("upload_success", ip=ip, token=token, 
+                          filename=os.path.basename(final_path), 
+                          size=saved_size, file_index=file_idx)
+
+            except Exception as e:
+                try:
+                    if os.path.exists(part_path):
+                        os.remove(part_path)
+                except:
+                    pass
+                _log_event("upload_failed", ip=ip, token=token, 
+                          filename=cleaned_name, error=str(e), file_index=file_idx)
+                continue
+
         if not _is_private_ip(ip):
             push_event("suspicious_activity", {
                 "ip": ip,
                 "reason": "unexpected_ip_upload",
-                "filename": os.path.basename(final_path)
+                "file_count": len(saved_files)
             })
 
-        # Use a unique .part file and atomic replace; on rare race, pick a new final target
-        base_part = final_path + ".part"
-        part_path = base_part
-        suffix = 1
-        while os.path.exists(part_path):
-            part_path = f"{base_part}.{suffix}"
-            suffix += 1
-
-        try:
-            os.makedirs(os.path.dirname(final_path), exist_ok=True)
-            _log_event("upload_start", ip=ip, token=token, filename=os.path.basename(final_path))
-            file.save(part_path)
-
-            try:
-                part_size = os.path.getsize(part_path)
-            except Exception:
-                part_size = -1
-
-            if part_size > app.config['MAX_CONTENT_LENGTH']:
-                try:
-                    os.remove(part_path)
-                except Exception:
-                    pass
-                _log_event("upload_too_large", ip=ip, token=token, filename=os.path.basename(final_path), size=part_size)
-                return "File too large", 413
-
-            # Attempt atomic move; if target taken, choose a fresh unique final path
-            try:
-                os.replace(part_path, final_path)
-            except FileExistsError:
-                final_path = _unique_path(CURRENT_RECEIVED_FOLDER, os.path.basename(final_path))
-                os.replace(part_path, final_path)
-
-        except Exception as e:
-            try:
-                if os.path.exists(part_path):
-                    os.remove(part_path)
-            except Exception:
-                pass
-            _log_event("upload_failed", ip=ip, token=token, filename=os.path.basename(final_path), error=str(e))
-            return "Upload failed", 500
-
-        # Optional checksum verification (SHA-256) if client provided 'sha256' form field
-        provided_sha256 = (request.form.get("sha256") or "").strip().lower()
-        if provided_sha256:
-            try:
-                h = hashlib.sha256()
-                with open(final_path, "rb") as f_in:
-                    for chunk in iter(lambda: f_in.read(1024 * 1024), b""):
-                        h.update(chunk)
-                computed = h.hexdigest()
-            except Exception as e:
-                _log_event("upload_checksum_error", ip=ip, token=token, filename=os.path.basename(final_path), error=str(e))
-                return "Checksum verification error", 500
-
-            if computed != provided_sha256:
-                try:
-                    os.remove(final_path)
-                except Exception:
-                    pass
-                _log_event("upload_checksum_mismatch", ip=ip, token=token, filename=os.path.basename(final_path), expected=provided_sha256, got=computed)
-                return "Checksum mismatch", 400
+        if saved_files:
+            mark_used(token)
+            push_event("device_connected", {
+                "ip": ip,
+                "token": token,
+                "route": "/receive"
+            })
+            if len(saved_files) == 1:
+                return f"File received: {saved_files[0]['filename']}"
             else:
-                _log_event("upload_checksum_ok", ip=ip, token=token, filename=os.path.basename(final_path), sha256=computed)
-
-        mark_used(token)
-        try:
-            saved_size = os.path.getsize(final_path)
-        except Exception:
-            saved_size = -1
-
-        _log_event("upload_success", ip=ip, token=token, filename=os.path.basename(final_path), size=saved_size)
-        push_event("device_connected", {
-            "ip": ip,
-            "token": token,
-            "route": "/receive"
-        })
-        return f"File received: {os.path.basename(final_path)}"
+                file_list = ", ".join([f['filename'] for f in saved_files])
+                return f"{len(saved_files)} files received: {file_list}"
+        else:
+            return "No valid files were uploaded", 400
 
     csrf_token = generate_csrf_token(token)
     _log_event("upload_form_render", ip=ip, token=token)
     return render_template('receive_file.html', token=token, csrf_token=csrf_token)
 
-# Local-only maintenance endpoints
 @app.route('/__clear_sessions__', methods=['POST'])
 def __clear_sessions():
     ip = _client_ip()
@@ -500,7 +466,6 @@ def __clear_sessions():
 
 @app.route('/__cleanup_parts__', methods=['POST'])
 def __cleanup_parts():
-    # Only allow local loopback to clean .part files synchronously
     ip = _client_ip()
     if ip not in ('127.0.0.1', '::1'):
         _log_event("cleanup_parts_denied", ip=ip)
@@ -539,7 +504,6 @@ def __shutdown():
         _log_event("shutdown_error", ip=ip, error=str(e))
     return "Shutdown attempted", 200
 
-# --- Secure error handling ---
 from werkzeug.exceptions import BadRequest, Forbidden, NotFound, TooManyRequests
 
 @app.errorhandler(BadRequest)

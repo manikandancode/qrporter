@@ -8,8 +8,9 @@ import os
 import shutil
 import urllib.request
 import urllib.error
-
-from platformdirs import user_data_dir  
+import zipfile
+from datetime import datetime
+from platformdirs import user_data_dir
 
 from PySide6.QtWidgets import (
     QApplication, QWidget, QLabel, QVBoxLayout, QHBoxLayout,
@@ -25,26 +26,28 @@ from qrporter.session_manager import create_session
 from qrporter.event_bus import try_pop_event
 
 APP_TITLE = "QRPorter"
-
 QR_SIZE = 320
 PADDING = 14
 SERVER_PORT = 5000
 
 # About dialog metadata
-APP_VERSION = "2.0.0"
+APP_VERSION = "3.0.0"
 APP_WEBSITE = "https://due.im/"
 APP_AUTHOR = "Manikandan D"
-
 APP_LICENSE_TEXT = """MIT License
+
 Copyright (c) 2025 Manikandan D
+
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights
 to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 copies of the Software, and to permit persons to whom the Software is
 furnished to do so, subject to the following conditions:
+
 The above copyright notice and this permission notice shall be included in all
 copies or substantial portions of the Software.
+
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -57,11 +60,10 @@ def _icon_path() -> str:
     return os.path.abspath(os.path.join(os.path.dirname(__file__), "static", "assets", "icon.png"))
 
 def get_local_ip() -> str:
-    # Return only the IP string
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         s.connect(("8.8.8.8", 80))
-        return s.getsockname()
+        return s.getsockname()[0]
     except Exception:
         return "127.0.0.1"
     finally:
@@ -86,11 +88,11 @@ class Toast(QWidget):
         self.label = QLabel("", self)
         self.label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.label.setStyleSheet("""
-        QLabel {
-            background-color: rgba(33,33,33, 0.92);
-            color: #fff; padding: 8px 12px;
-            border-radius: 8px; font-size: 12pt;
-        }
+            QLabel {
+                background-color: rgba(33,33,33, 0.92);
+                color: #fff; padding: 8px 12px;
+                border-radius: 8px; font-size: 12pt;
+            }
         """)
         self.hide()
         self._timer = QTimer(self)
@@ -108,14 +110,18 @@ class Toast(QWidget):
         self._timer.start(duration_ms)
 
 class CopyProgressDialog(QDialog):
-    def __init__(self, parent=None, filename=""):
+    def __init__(self, parent=None, filename="", total_files=1):
         super().__init__(parent)
-        self.setWindowTitle("Preparing file")
+        self.setWindowTitle("Preparing files")
         self.setModal(True)
         self.setMinimumWidth(420)
 
         layout = QVBoxLayout(self)
-        title = QLabel(f"Preparing “{filename}” to send to mobile")
+
+        if total_files == 1:
+            title = QLabel(f"Preparing '{filename}' to send to mobile")
+        else:
+            title = QLabel(f"Preparing {total_files} files to send to mobile")
         title.setWordWrap(True)
         layout.addWidget(title)
 
@@ -157,8 +163,8 @@ class QRPorterApp(QWidget):
         if os.path.isfile(icon_file):
             self.setWindowIcon(QIcon(icon_file))
 
-        # Folders (must match backend) — cross‑platform user data root
-        app_data_root = user_data_dir(APP_TITLE, roaming=True, ensure_exists=True)  # matches backend DATA_ROOT [5]
+        # Folders (must match backend)
+        app_data_root = user_data_dir(APP_TITLE, roaming=True, ensure_exists=True)
         self.shared_folder = os.path.join(app_data_root, "shared")
         self.received_folder = os.path.join(app_data_root, "received")
         os.makedirs(self.shared_folder, exist_ok=True)
@@ -178,12 +184,12 @@ class QRPorterApp(QWidget):
         action_row = QHBoxLayout()
         action_row.setSpacing(PADDING)
 
-        self.btn_send = QPushButton("Send file to mobile")
+        self.btn_send = QPushButton("Send files to mobile")
         self.btn_send.setFixedHeight(40)
         self.btn_send.clicked.connect(self.send_file)
         action_row.addWidget(self.btn_send, 1)
 
-        self.btn_receive = QPushButton("Get file from mobile")
+        self.btn_receive = QPushButton("Get files from mobile")
         self.btn_receive.setFixedHeight(40)
         self.btn_receive.clicked.connect(self.receive_file)
         action_row.addWidget(self.btn_receive, 1)
@@ -200,11 +206,11 @@ class QRPorterApp(QWidget):
         qr_container = QFrame()
         qr_container.setObjectName("qrContainer")
         qr_container.setStyleSheet("""
-        QFrame#qrContainer {
-            border: 1px solid #ddd;
-            border-radius: 8px;
-            background: #fafafa;
-        }
+            QFrame#qrContainer {
+                border: 1px solid #ddd;
+                border-radius: 8px;
+                background: #fafafa;
+            }
         """)
         qr_layout = QVBoxLayout(qr_container)
         qr_layout.setContentsMargins(16, 16, 16, 16)
@@ -222,7 +228,7 @@ class QRPorterApp(QWidget):
 
         root.addWidget(qr_container, alignment=Qt.AlignCenter)
 
-        # Folder openers only 
+        # Folder openers
         folders_grid = QGridLayout()
         folders_grid.setHorizontalSpacing(PADDING)
         folders_grid.setVerticalSpacing(8)
@@ -261,7 +267,7 @@ class QRPorterApp(QWidget):
         self.btn_toggle_server.clicked.connect(self.toggle_server)
         status_row.addWidget(self.btn_toggle_server, 0)
 
-        # Add About button 
+        # Add About button
         self.btn_about = QPushButton("About")
         self.btn_about.setFixedHeight(36)
         self.btn_about.clicked.connect(self.show_about)
@@ -290,7 +296,6 @@ class QRPorterApp(QWidget):
         # Auto-start server on launch
         self.start_server_on_launch()
 
-    # ---- Server control ----
     def start_server_on_launch(self):
         if self.server_running:
             return
@@ -319,14 +324,13 @@ class QRPorterApp(QWidget):
         else:
             self.start_server_on_launch()
 
-    # ---- Open in file manager ----
     def _open_folder(self, path: str):
         try:
             if not path:
                 return
             os.makedirs(path, exist_ok=True)
             url = QUrl.fromLocalFile(path)
-            QDesktopServices.openUrl(url)  # opens with OS file manager 
+            QDesktopServices.openUrl(url)
         except Exception as e:
             QMessageBox.warning(self, "Open Folder", f"Unable to open folder:\n{path}\n\n{e}")
 
@@ -336,9 +340,7 @@ class QRPorterApp(QWidget):
     def open_received_folder(self):
         self._open_folder(self.received_folder)
 
-    # ---- Actions ----
     def _copy_with_progress(self, src: str, dst: str, progress_dialog: CopyProgressDialog):
-        # Copy with 1 MiB chunks and update the dialog
         total = 0
         try:
             total = os.path.getsize(src)
@@ -347,6 +349,7 @@ class QRPorterApp(QWidget):
 
         copied = 0
         chunk = 1024 * 1024
+
         os.makedirs(os.path.dirname(dst), exist_ok=True)
 
         with open(src, 'rb') as f_in, open(dst, 'wb') as f_out:
@@ -359,13 +362,50 @@ class QRPorterApp(QWidget):
                 f_out.write(buf)
                 copied += len(buf)
                 pct = int((copied / total) * 100) if total > 0 else 0
-                # Show MB copied out of MB total
                 mb_copied = copied / (1024 * 1024)
                 mb_total = total / (1024 * 1024) if total > 0 else 0
                 progress_dialog.update_progress(pct, f"{mb_copied:.1f} MB / {mb_total:.1f} MB")
 
+    def _create_zip_with_progress(self, file_paths, zip_path, progress_dialog: CopyProgressDialog):
+        """Create a ZIP file from multiple files with progress tracking"""
+        total_size = 0
+        try:
+            for file_path in file_paths:
+                if os.path.isfile(file_path):
+                    total_size += os.path.getsize(file_path)
+        except Exception:
+            total_size = 0
+
+        processed_size = 0
+        
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for i, file_path in enumerate(file_paths):
+                if progress_dialog.cancelled():
+                    raise KeyboardInterrupt("ZIP creation cancelled")
+                
+                if not os.path.isfile(file_path):
+                    continue
+                    
+                # Add file to ZIP with just the filename (no path)
+                arcname = os.path.basename(file_path)
+                zipf.write(file_path, arcname)
+                
+                try:
+                    file_size = os.path.getsize(file_path)
+                    processed_size += file_size
+                except:
+                    processed_size += 1024  # fallback
+                
+                pct = int((processed_size / total_size) * 100) if total_size > 0 else int(((i + 1) / len(file_paths)) * 100)
+                mb_processed = processed_size / (1024 * 1024)
+                mb_total = total_size / (1024 * 1024) if total_size > 0 else 0
+                
+                if total_size > 0:
+                    progress_dialog.update_progress(pct, f"Compressing: {mb_processed:.1f} MB / {mb_total:.1f} MB")
+                else:
+                    progress_dialog.update_progress(pct, f"Compressing file {i + 1} of {len(file_paths)}")
+
     def _normalize_ip_for_url(self, ip: str) -> str:
-        # Final guard against tuple-like strings showing up in the URL
         ip = str(ip)
         if ip.startswith("("):
             pos1 = ip.find("'")
@@ -375,63 +415,94 @@ class QRPorterApp(QWidget):
         return ip
 
     def send_file(self):
-        file_path, _ = QFileDialog.getOpenFileName(self, "Select file to send", self.shared_folder)
-        if not file_path:
+        # Use getOpenFileNames() for multiple file selection
+        file_paths, _ = QFileDialog.getOpenFileNames(
+            self, 
+            "Select files to send", 
+            self.shared_folder,
+            "All Files (*.*)"
+        )
+        
+        if not file_paths:
             return
 
-        filename = os.path.basename(file_path)
-        dest_path = os.path.join(self.shared_folder, filename)
-
         try:
-            if os.path.abspath(file_path) != os.path.abspath(dest_path):
-                # Show progress dialog only when a copy is needed
-                dlg = CopyProgressDialog(self, filename=filename)
+            if len(file_paths) == 1:
+                # Single file - handle as before
+                file_path = file_paths[0]
+                filename = os.path.basename(file_path)
+                dest_path = os.path.join(self.shared_folder, filename)
+
+                if os.path.abspath(file_path) != os.path.abspath(dest_path):
+                    dlg = CopyProgressDialog(self, filename=filename, total_files=1)
+                    dlg.show()
+                    QApplication.processEvents()
+                    self._copy_with_progress(file_path, dest_path, dlg)
+                    dlg.accept()
+
+                final_path = dest_path
+                display_name = filename
+
+            else:
+                # Multiple files - create ZIP with timestamp
+                timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+                zip_filename = f"qrporter-{timestamp}.zip"
+                zip_path = os.path.join(self.shared_folder, zip_filename)
+
+                dlg = CopyProgressDialog(self, filename=zip_filename, total_files=len(file_paths))
                 dlg.show()
                 QApplication.processEvents()
-                # Perform the copy with progress
-                self._copy_with_progress(file_path, dest_path, dlg)
+                
+                self._create_zip_with_progress(file_paths, zip_path, dlg)
                 dlg.accept()
-            else:
-                # No copy needed; already in outgoing
-                pass
+
+                final_path = zip_path
+                display_name = f"{len(file_paths)} files → {zip_filename}"
+
         except KeyboardInterrupt:
             # User cancelled
             try:
-                if os.path.exists(dest_path):
+                if len(file_paths) > 1 and 'zip_path' in locals() and os.path.exists(zip_path):
+                    os.remove(zip_path)
+                elif len(file_paths) == 1 and 'dest_path' in locals() and os.path.exists(dest_path):
                     os.remove(dest_path)
             except Exception:
                 pass
-            QMessageBox.information(self, "Cancelled", "Copy cancelled.")
+            QMessageBox.information(self, "Cancelled", "Operation cancelled.")
             return
         except Exception as e:
-            QMessageBox.critical(self, "Copy Error", f"Failed to copy to shared folder:\n{e}")
+            QMessageBox.critical(self, "Error", f"Failed to prepare files:\n{e}")
             return
 
-        token = create_session("send", file_path=dest_path, password=None, expires_in=600)
+        # Create session and QR code
+        token = create_session("send", file_path=final_path, password=None, expires_in=600)
         ip = get_local_ip()
         ip = self._normalize_ip_for_url(ip)
         url = f"http://{ip}:{SERVER_PORT}/send/{token}"
+
         qr_img = generate_qr_qimage(url, size=QR_SIZE)
         self.qr_code_label.setPixmap(QPixmap.fromImage(qr_img).scaled(
             QSize(QR_SIZE, QR_SIZE), Qt.KeepAspectRatio, Qt.SmoothTransformation
         ))
+
         self.qr_title.setText("PC → Mobile")
-        self.info_label.setText(f"Scan to download:\n{filename}")
+        self.info_label.setText(f"Scan to download:\n{display_name}")
 
     def receive_file(self):
         token = create_session("receive", file_path=None, password=None, expires_in=600)
         ip = get_local_ip()
         ip = self._normalize_ip_for_url(ip)
         url = f"http://{ip}:{SERVER_PORT}/receive/{token}"
+
         qr_img = generate_qr_qimage(url, size=QR_SIZE)
         self.qr_code_label.setPixmap(QPixmap.fromImage(qr_img).scaled(
             QSize(QR_SIZE, QR_SIZE), Qt.KeepAspectRatio, Qt.SmoothTransformation
         ))
+
         self.qr_title.setStyleSheet("color: #000000;")
         self.qr_title.setText("Mobile → PC")
-        self.info_label.setText("Scan to upload a file to this PC.")
+        self.info_label.setText("Scan to upload files to this PC.")
 
-    # ---- About dialog ----
     def show_about(self):
         dlg = QDialog(self)
         dlg.setWindowTitle("About QRPorter")
@@ -477,7 +548,6 @@ class QRPorterApp(QWidget):
 
         dlg.exec()
 
-    # ---- Alerts polling ----
     def _poll_events(self):
         while True:
             evt = try_pop_event()
@@ -485,6 +555,7 @@ class QRPorterApp(QWidget):
                 break
             etype = evt.get("type")
             payload = evt.get("payload", {})
+
             if etype == "device_connected":
                 ip = payload.get("ip", "?")
                 self.toast.show_message(f"New device connected: {ip}")
@@ -497,7 +568,6 @@ class QRPorterApp(QWidget):
                 elif reason == "unexpected_ip_upload":
                     self.toast.show_message(f"Suspicious upload from {ip}")
 
-    # Ensure cleanup on window close
     def closeEvent(self, event):
         try:
             if self.server_running:
@@ -525,10 +595,10 @@ def start_gui_app():
         app.setWindowIcon(QIcon(icon_file))
 
     app.setStyleSheet("""
-    QWidget { font-family: "Segoe UI", Arial, sans-serif; font-size: 11pt; }
-    QPushButton { background: #1976d2; color: white; border: none; border-radius: 6px; padding: 6px 10px; }
-    QPushButton:hover { background: #1565c0; }
-    QPushButton:pressed { background: #0d47a1; }
+        QWidget { font-family: "Segoe UI", Arial, sans-serif; font-size: 11pt; }
+        QPushButton { background: #1976d2; color: white; border: none; border-radius: 6px; padding: 6px 10px; }
+        QPushButton:hover { background: #1565c0; }
+        QPushButton:pressed { background: #0d47a1; }
     """)
 
     window = QRPorterApp()

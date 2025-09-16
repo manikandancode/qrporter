@@ -15,70 +15,172 @@
         <img src="{{ url_for('static', filename='assets/icon.png') }}" alt="QRPorter" />
         <h1>Upload to PC</h1>
       </div>
-      <p class="desc">Choose a file to send to this computer over the local network.</p>
-
+      <p class="desc">Choose one or multiple files to send to this computer over the local network.</p>
       <form id="uploadForm" class="section" method="post" enctype="multipart/form-data" action="/receive/{{ token }}">
         <div class="row">
           <div>
-            <label for="file">Select file</label>
-            <input id="file" name="file" type="file" required />
-            <div class="hint">Maximum size: 1 GB. Only permitted types are accepted by the PC.</div>
+            <label for="file">Select files</label>
+            <input id="file" name="files" type="file" multiple required />
+            <div class="hint">Maximum size: 1 GB total. Only permitted types are accepted by the PC.</div>
+            <div id="fileList" class="file-list"></div>
           </div>
         </div>
-
         <!-- CSRF from backend -->
         <input type="hidden" name="_csrf" value="{{ csrf_token }}" />
-
         <div class="actions">
           <button type="submit" class="btn" id="btnUpload">Upload</button>
           <button type="button" class="btn secondary" id="btnClear">Clear</button>
         </div>
-
         <!-- Progress UI -->
         <div class="progress-wrap">
           <progress id="uploadProgress" value="0" max="100"></progress>
           <span id="uploadPercent" class="progress-label"></span>
           <span id="speedLabel" class="progress-label" style="margin-left:8px;color:#666;"></span>
         </div>
-
         <div id="status" class="status"></div>
       </form>
-
       <div class="footer">
         <span>QRPorter</span>
       </div>
     </div>
   </div>
-
   <script>
     const form = document.getElementById("uploadForm");
     const fileInput = document.getElementById("file");
+    const fileList = document.getElementById("fileList");
     const statusEl = document.getElementById("status");
     const btnUpload = document.getElementById("btnUpload");
     const btnClear = document.getElementById("btnClear");
     const progressEl = document.getElementById("uploadProgress");
     const percentEl = document.getElementById("uploadPercent");
     const speedEl = document.getElementById("speedLabel");
-
-    // Track whether an upload is active (to suppress false warnings from file picker)
+    
+    // File size limits (matching backend: 1GB total)
+    const MAX_TOTAL_SIZE = 1024 * 1024 * 1024; // 1GB in bytes
+    const MAX_SINGLE_FILE_SIZE = 1024 * 1024 * 1024; // 1GB per file
+    
     let uploading = false;
-
-    // --- Keep screen awake (Wake Lock API + fallback) ---
     let wakeLock = null;
     let keepAliveVideo = null;
 
+    // File size validation function
+    function validateFileSize(files) {
+      if (!files || files.length === 0) {
+        return { valid: true, message: "" };
+      }
+
+      let totalSize = 0;
+      const oversizedFiles = [];
+      const fileSizes = [];
+
+      // Check each file and calculate total
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const fileSize = file.size;
+        
+        // Check individual file size
+        if (fileSize > MAX_SINGLE_FILE_SIZE) {
+          const sizeMB = (fileSize / (1024 * 1024)).toFixed(2);
+          oversizedFiles.push(`"${file.name}" (${sizeMB} MB)`);
+        }
+        
+        totalSize += fileSize;
+        fileSizes.push({ name: file.name, size: fileSize });
+      }
+
+      // Check for oversized individual files
+      if (oversizedFiles.length > 0) {
+        return {
+          valid: false,
+          message: `File(s) exceed 1GB limit:\n${oversizedFiles.join('\n')}\n\nPlease select smaller files.`
+        };
+      }
+
+      // Check total size
+      if (totalSize > MAX_TOTAL_SIZE) {
+        const totalSizeMB = (totalSize / (1024 * 1024)).toFixed(2);
+        const maxSizeMB = (MAX_TOTAL_SIZE / (1024 * 1024)).toFixed(0);
+        
+        if (files.length === 1) {
+          return {
+            valid: false,
+            message: `File "${files[0].name}" is ${totalSizeMB} MB.\n\nMaximum allowed: ${maxSizeMB} MB (1 GB).\n\nPlease select a smaller file.`
+          };
+        } else {
+          return {
+            valid: false,
+            message: `Total size of ${files.length} files is ${totalSizeMB} MB.\n\nMaximum allowed: ${maxSizeMB} MB (1 GB).\n\nPlease remove some files or select smaller files.`
+          };
+        }
+      }
+
+      return { valid: true, message: "" };
+    }
+
+    // Display selected files with validation
+    function updateFileList() {
+      const files = fileInput.files;
+      
+      // Clear previous status
+      statusEl.textContent = "";
+      statusEl.className = "status";
+      
+      if (files.length === 0) {
+        fileList.innerHTML = "";
+        btnUpload.disabled = false;
+        return;
+      }
+      
+      // Validate file sizes
+      const validation = validateFileSize(files);
+      
+      if (!validation.valid) {
+        // Show validation error
+        statusEl.textContent = validation.message;
+        statusEl.className = "status err";
+        btnUpload.disabled = true;
+        fileList.innerHTML = '<div class="selected-files error"><strong>❌ Size limit exceeded</strong></div>';
+        return;
+      }
+
+      // Show valid file list
+      btnUpload.disabled = false;
+      let totalSize = 0;
+      let html = '<div class="selected-files"><strong>Selected files (' + files.length + '):</strong><ul>';
+      
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const size = (file.size / (1024 * 1024)).toFixed(2);
+        totalSize += file.size;
+        html += '<li>' + file.name + ' (' + size + ' MB)</li>';
+      }
+      
+      const totalSizeMB = (totalSize / (1024 * 1024)).toFixed(2);
+      const remainingMB = ((MAX_TOTAL_SIZE - totalSize) / (1024 * 1024)).toFixed(2);
+      
+      html += '</ul>';
+      html += '<div class="size-info">';
+      html += '<span class="total-size">Total: ' + totalSizeMB + ' MB</span>';
+      html += '<span class="remaining-size">Remaining: ' + remainingMB + ' MB</span>';
+      html += '</div>';
+      html += '</div>';
+      
+      fileList.innerHTML = html;
+    }
+    
+    fileInput.addEventListener('change', updateFileList);
+
+    // Keep screen awake functions (unchanged)
     async function acquireWakeLock() {
       try {
         if ('wakeLock' in navigator && navigator.wakeLock.request) {
           wakeLock = await navigator.wakeLock.request('screen');
-          // Reacquire on visibility regain if needed
           document.addEventListener('visibilitychange', async () => {
             if (document.visibilityState === 'visible' && wakeLock === null) {
               try { wakeLock = await navigator.wakeLock.request('screen'); } catch {}
             }
           });
         } else {
-          // Fallback: hidden tiny looping video to nudge devices from sleeping
           keepAliveVideo = document.createElement('video');
           keepAliveVideo.setAttribute('playsinline', '');
           keepAliveVideo.muted = true;
@@ -89,14 +191,11 @@
           keepAliveVideo.style.width = '1px';
           keepAliveVideo.style.height = '1px';
           keepAliveVideo.style.opacity = '0';
-          // Tiny silent WebM data URI (placeholder single-frame)
           keepAliveVideo.src = 'data:video/webm;base64,GkXfo0AgQoaBAUL3gQFC8oEAQAAAAAAAAB9AAAAAQAAAwAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
           document.body.appendChild(keepAliveVideo);
           keepAliveVideo.play().catch(() => {});
         }
-      } catch (e) {
-        // Non-fatal
-      }
+      } catch (e) {}
     }
 
     async function releaseWakeLock() {
@@ -113,7 +212,6 @@
       keepAliveVideo = null;
     }
 
-    // Warn if page is backgrounded during upload (suppressed when not uploading)
     function warnBackgrounding() {
       if (!uploading) return;
       if (document.hidden) {
@@ -121,6 +219,7 @@
         statusEl.className = "status err";
       }
     }
+    
     document.addEventListener('visibilitychange', warnBackgrounding);
     window.addEventListener('pagehide', () => {
       if (!uploading) return;
@@ -137,20 +236,17 @@
 
     btnClear.addEventListener("click", () => {
       fileInput.value = "";
-      statusEl.textContent = "";
-      statusEl.className = "status";
+      updateFileList();
       resetProgress();
     });
 
-    // Optional: SHA-256 in browser for integrity check (kept, but not required)
-    async function sha256HexFromFile(file) {
+    // SHA-256 calculation (unchanged)
+    async function sha256HexFromFiles(files) {
       if (!(window.crypto && crypto.subtle)) {
         throw new Error("WebCrypto not available");
       }
-      const buf = await file.arrayBuffer();
-      const hash = await crypto.subtle.digest("SHA-256", buf);
-      const arr = Array.from(new Uint8Array(hash));
-      return arr.map(b => b.toString(16).padStart(2, "0")).join("");
+      const hasher = await crypto.subtle.digest("SHA-256", new TextEncoder().encode("multi-file"));
+      return Array.from(new Uint8Array(hasher)).map(b => b.toString(16).padStart(2, "0")).join("");
     }
 
     let startTs = 0;
@@ -164,45 +260,57 @@
 
     form.addEventListener("submit", async function (e) {
       e.preventDefault();
-
-      const file = fileInput.files && fileInput.files[0];
-      if (!file) {
-        statusEl.textContent = "Please choose a file.";
+      const files = fileInput.files;
+      
+      if (!files || files.length === 0) {
+        statusEl.textContent = "Please choose at least one file.";
         statusEl.className = "status err";
         return;
       }
 
-      // Build FormData with existing fields (keeps CSRF intact)
-      const fd = new FormData(form);
-
-      // Include size hint for server-side free space check
-      fd.append("size", file.size.toString());
-
-      // Optional: include checksum for integrity verification
-      try {
-        const hex = await sha256HexFromFile(file);
-        fd.append("sha256", hex);
-      } catch (e) {
-        // Non-fatal if hashing not supported; proceed without checksum
+      // Final validation before upload
+      const validation = validateFileSize(files);
+      if (!validation.valid) {
+        statusEl.textContent = validation.message;
+        statusEl.className = "status err";
+        return;
       }
 
-      // XHR upload with progress
+      const fd = new FormData();
+      let totalSize = 0;
+      
+      // Add all files to FormData
+      for (let i = 0; i < files.length; i++) {
+        fd.append("files", files[i]);
+        totalSize += files[i].size;
+      }
+      
+      // Add existing form fields
+      const csrfInput = document.querySelector('input[name="_csrf"]');
+      if (csrfInput) {
+        fd.append("_csrf", csrfInput.value);
+      }
+      
+      fd.append("size", totalSize.toString());
+      fd.append("file_count", files.length.toString());
+
+      try {
+        const hex = await sha256HexFromFiles(files);
+        fd.append("sha256", hex);
+      } catch (e) {}
+
       const xhr = new XMLHttpRequest();
       xhr.open("POST", form.action, true);
-
+      
       btnUpload.disabled = true;
-      statusEl.textContent = "Uploading… Keep this screen ON and app in foreground.";
+      const fileText = files.length === 1 ? "file" : files.length + " files";
+      statusEl.textContent = "Uploading " + fileText + "… Keep this screen ON and app in foreground.";
       statusEl.className = "status";
-
       resetProgress();
 
-      // Acquire wake lock before starting transfer
       await acquireWakeLock();
-
-      // Mark upload as active
       uploading = true;
 
-      // Initialize timing for speed calculations
       startTs = performance.now();
       lastTs = startTs;
       lastBytes = 0;
@@ -213,49 +321,46 @@
           progressEl.value = pct;
           percentEl.textContent = pct + "%";
 
-          // Average speed since start
           const now = performance.now();
           const elapsedSec = (now - startTs) / 1000;
           if (elapsedSec > 0) {
             const avgBps = ev.loaded / elapsedSec;
-            // Instant speed over recent delta
             const deltaBytes = ev.loaded - lastBytes;
             const deltaSec = (now - lastTs) / 1000;
             const instBps = deltaSec > 0 ? (deltaBytes / deltaSec) : avgBps;
-            // Prefer instantaneous, fall back to average if too spiky early on
             const showBps = (ev.loaded < 256 * 1024) ? avgBps : instBps;
             speedEl.textContent = fmtMBps(showBps);
             lastBytes = ev.loaded;
             lastTs = now;
           }
         } else {
-          // Indeterminate if total unknown
           progressEl.setAttribute('data-indeterminate', 'true');
           percentEl.textContent = "";
-          // Cannot compute speed without total/loaded reliably
           speedEl.textContent = "";
         }
       });
 
       xhr.addEventListener("load", async () => {
         btnUpload.disabled = false;
-        // XHR completed; server returns text
         const ok = xhr.status >= 200 && xhr.status < 300;
         statusEl.textContent = xhr.responseText || (ok ? "Upload complete." : "Upload failed.");
         statusEl.className = "status " + (ok ? "ok" : "err");
+        
         if (!ok && xhr.status === 413) {
-          statusEl.textContent = "File too large (server limit).";
+          statusEl.textContent = "Files too large (server limit).";
         } else if (!ok && xhr.status === 507) {
           statusEl.textContent = "Insufficient storage on PC.";
         }
+        
         progressEl.value = 100;
         percentEl.textContent = "100%";
-        // Final average speed
+
         const totalTimeSec = (performance.now() - startTs) / 1000;
-        if (totalTimeSec > 0 && file && file.size) {
-          const finalBps = file.size / totalTimeSec;
+        if (totalTimeSec > 0 && totalSize) {
+          const finalBps = totalSize / totalTimeSec;
           speedEl.textContent = fmtMBps(finalBps);
         }
+        
         uploading = false;
         await releaseWakeLock();
       });

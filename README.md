@@ -32,6 +32,7 @@ A lightweight desktop + web utility for moving files between a mobile device and
 - PC → Mobile: Select the file & generate a QR code; scan to download the selected file on your mobile.
 - Mobile → PC: Generate the QR code, visit the upload page from the QR on mobile; send a file back to the PC.
 - One‑time session tokens and basic rate limiting for local safety.
+- Send/Receive multiple files at once.
 
 ---
 
@@ -75,6 +76,7 @@ Required Python packages (minimum versions):
 - qrcode>=8.2
 - Werkzeug>=3.1.3
 - Pillow>=11.0.0
+- platformdirs>=4.0.0
 
 ---
 
@@ -106,7 +108,7 @@ venv\Scripts\activate
   ```
 - Or install individually with minimum versions:
   ```
-  pip install "Flask>=3.1.2" "PySide6>=6.6.1" "qrcode>=8.2" "Werkzeug>=3.1.3" "Pillow>=11.0.0"
+  pip install "Flask>=3.1.2" "PySide6>=6.6.1" "qrcode>=8.2" "Werkzeug>=3.1.3" "Pillow>=11.0.0" "platformdirs>=4.0.0"
   ```
 
 5) Run the desktop app
@@ -121,13 +123,13 @@ venv\Scripts\activate
 
 - Send file to mobile (PC → Mobile):
 1. Click “Send file to mobile.”
-2. Pick a file; a QR code appears.
+2. Pick a file (or multiple); a QR code appears.
 3. Scan the QR with the phone camera/browser to download.
 
 - Get file from mobile (Mobile → PC):
 1. Click “Get file from mobile.”
 2. Scan the QR displayed on the phone.
-3. Choose a file on the phone and upload it; the PC saves it locally.
+3. Choose a file (or multiple) on the phone and upload it; the PC saves it locally.
 
 Default folders (auto‑created):
 - Outgoing: `shared/`
@@ -151,6 +153,8 @@ Use the “Open Outgoing/Incoming Folder” buttons in the UI to open these loca
 3. URL shows a tuple like `('192.168.x.x', 52546)`:
 - Ensure the app uses only `getsockname()[0]` (IP string) when forming URLs and restart the app.
 
+4. File size limit:
+- 1GG per transper.
 ---
 
 ## Project Rationale
